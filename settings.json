@@ -1,0 +1,6 @@
+{
+    "window.commandCenter": true,
+    "workbench.colorTheme": "Default High Contrast Light",
+    "terminal.integrated.automationProfile.windows": null,
+    "terminal.integrated.defaultProfile.windows": "Command Prompt"
+} 
