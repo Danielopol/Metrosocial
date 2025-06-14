@@ -61,19 +61,57 @@ const create = async (userData) => {
 
 // Update user
 const update = (id, userData) => {
+  console.log('==== USER MODEL UPDATE ====');
+  console.log('Looking for user with ID:', id);
+  
   const index = users.findIndex(user => user.id === id);
   
+  console.log('User index in array:', index);
+  
   if (index === -1) {
+    console.error('USER NOT FOUND:', id);
+    console.log('Current users in system:', users.map(u => `${u.id} (${u.username})`).join(', '));
     throw new Error('User not found');
   }
 
   // Don't update password through this method
   const { password, ...updateData } = userData;
   
+  // Log what's being updated
+  console.log('Updating user:', id);
+  console.log('Current user data:', JSON.stringify({
+    ...users[index],
+    password: '***REDACTED***'
+  }));
+  
+  console.log('Update fields:', JSON.stringify(updateData));
+  
+  // Allow fields to be set to null or empty string, but not undefined
+  const cleanUpdateData = {};
+  Object.keys(updateData).forEach(key => {
+    if (updateData[key] !== undefined) { // Allow null and empty strings
+      cleanUpdateData[key] = updateData[key];
+    }
+  });
+  
+  console.log('Clean update data:', JSON.stringify({
+    ...cleanUpdateData,
+    avatar: cleanUpdateData.avatar ? (typeof cleanUpdateData.avatar === 'string' && 
+      cleanUpdateData.avatar.startsWith('data:image/') ? 'image data exists' : cleanUpdateData.avatar) : null
+  }));
+  
+  // Update the user record
   users[index] = {
     ...users[index],
-    ...updateData
+    ...cleanUpdateData
   };
+  
+  console.log('Updated user data:', JSON.stringify({
+    ...users[index],
+    password: '***REDACTED***'
+  }));
+  
+  console.log('==== USER MODEL UPDATE COMPLETE ====');
 
   return { ...users[index], password: undefined }; // Return user without password
 };

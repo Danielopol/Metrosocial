@@ -29,8 +29,8 @@ router.post('/register', async (req, res) => {
       name: name || username,
     });
     
-    // Generate token
-    const token = generateToken(user.id);
+    // Generate token with full user information
+    const token = generateToken(user);
     
     res.status(201).json({
       message: 'User created successfully',
@@ -69,8 +69,8 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
     
-    // Generate token
-    const token = generateToken(user.id);
+    // Generate token with full user information
+    const token = generateToken(user);
     
     // Return user info (except password)
     const { password: _, ...userWithoutPassword } = user;
@@ -89,7 +89,7 @@ router.post('/login', async (req, res) => {
 router.get('/me', verifyToken, async (req, res) => {
   try {
     // The token is verified in the auth middleware
-    const userId = req.user?.userId;
+    const userId = req.user.id;
     
     if (!userId) {
       return res.status(401).json({ message: 'Not authenticated' });
@@ -108,6 +108,43 @@ router.get('/me', verifyToken, async (req, res) => {
       user: userWithoutPassword
     });
   } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Alias for /me endpoint - frontend is using /verify
+router.get('/verify', verifyToken, async (req, res) => {
+  try {
+    console.log('==== VERIFY TOKEN ENDPOINT ====');
+    // The token is verified in the auth middleware
+    const userId = req.user.id;
+    
+    if (!userId) {
+      console.log('No user ID in token');
+      return res.status(401).json({ message: 'Not authenticated' });
+    }
+    
+    console.log('Looking up user with ID:', userId);
+    const user = UserModel.findById(userId);
+    
+    if (!user) {
+      console.log('User not found with ID:', userId);
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Return user info (except password)
+    const { password, ...userWithoutPassword } = user;
+    
+    console.log('User found, returning data:', JSON.stringify({
+      ...userWithoutPassword,
+      passwordExists: !!password
+    }));
+    
+    res.json({
+      user: userWithoutPassword
+    });
+  } catch (error) {
+    console.error('Error in verify endpoint:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

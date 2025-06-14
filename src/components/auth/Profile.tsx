@@ -1,21 +1,92 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { AuthUser } from '../../types';
+import { usePosts } from '../../context/PostContext';
+import { AuthUser, SocialPost } from '../../types';
+import { MessageSquare, Calendar } from 'lucide-react';
 
 interface ProfileProps {
   onClose?: () => void;
+  initialEditMode?: boolean;
 }
 
 const EMOJI_OPTIONS = ['👤', '👨‍💻', '👩‍💻', '👨‍🎨', '👩‍🎨', '👨‍🚀', '👩‍🚀', '🧑‍🎓', '👨‍🎓', '👩‍🎓'];
 
-const Profile: React.FC<ProfileProps> = ({ onClose }) => {
+const Profile: React.FC<ProfileProps> = ({ onClose, initialEditMode }) => {
   const { authState, updateProfile, logout } = useAuth();
-  const [isEditing, setIsEditing] = useState(false);
+  const { getLatestUserPost } = usePosts();
+  const [isEditing, setIsEditing] = useState(initialEditMode || false);
   const [formData, setFormData] = useState<Partial<AuthUser>>(authState.user || {});
   const [formError, setFormError] = useState<string | null>(null);
-  const [selectedEmoji, setSelectedEmoji] = useState(authState.user?.avatar || '👤');
+  const [selectedEmoji, setSelectedEmoji] = useState<string>('👤');
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const [avatarKey, setAvatarKey] = useState(0); // Force re-render key
+  const [refreshRequired, setRefreshRequired] = useState(false); // Flag to force re-render
+  const [latestPost, setLatestPost] = useState<SocialPost | null>(null);
+  const [loadingLatestPost, setLoadingLatestPost] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Force the component to re-render when avatar changes
+  useEffect(() => {
+    if (refreshRequired) {
+      setAvatarKey(prev => prev + 1);
+      setRefreshRequired(false);
+    }
+  }, [refreshRequired]);
+
+  // Initialize avatar state when authState changes or when editing is toggled
+  useEffect(() => {
+    if (authState.user) {
+      // Reset form data based on current user data
+      setFormData({...authState.user});
+      
+      // Handle avatar initialization
+      const avatar = authState.user.avatar;
+      if (avatar) {
+        if (typeof avatar === 'string' && avatar.startsWith('data:image/')) {
+          setUploadedImage(avatar);
+          setSelectedEmoji('👤'); // Default emoji if we're using an image
+        } else {
+          setSelectedEmoji(avatar as string);
+          setUploadedImage(null);
+        }
+        // Force re-render of avatar
+        setAvatarKey(prev => prev + 1);
+      }
+    }
+  }, [authState.user, isEditing]);
+
+  // Fetch user's latest post
+  useEffect(() => {
+    const fetchLatestPost = async () => {
+      if (!authState.user?.id) return;
+      
+      setLoadingLatestPost(true);
+      try {
+        const post = await getLatestUserPost(authState.user.id);
+        setLatestPost(post);
+      } catch (error) {
+        console.error('Error fetching latest post:', error);
+      } finally {
+        setLoadingLatestPost(false);
+      }
+    };
+
+    fetchLatestPost();
+    
+    // Listen for new posts to refresh latest post
+    const handlePostCreated = (event: CustomEvent) => {
+      const newPost = event.detail;
+      if (newPost.userId === authState.user?.id) {
+        setLatestPost(newPost);
+      }
+    };
+    
+    window.addEventListener('postCreated', handlePostCreated as EventListener);
+    
+    return () => {
+      window.removeEventListener('postCreated', handlePostCreated as EventListener);
+    };
+  }, [authState.user?.id, getLatestUserPost]);
 
   if (!authState.user) {
     return <div>User not authenticated</div>;
@@ -63,12 +134,13 @@ const Profile: React.FC<ProfileProps> = ({ onClose }) => {
       const reader = new FileReader();
       reader.onload = (e) => {
         if (e.target && typeof e.target.result === 'string') {
-          setUploadedImage(e.target.result);
-          // Store either emoji or image URL in avatar field
-          setFormData({
-            ...formData,
-            avatar: e.target.result
-          });
+          const imageData = e.target.result;
+          setUploadedImage(imageData);
+          setFormData(prev => ({
+            ...prev,
+            avatar: imageData
+          }));
+          setAvatarKey(prev => prev + 1); // Force re-render
         }
       };
       reader.readAsDataURL(file);
@@ -77,22 +149,62 @@ const Profile: React.FC<ProfileProps> = ({ onClose }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('==== PROFILE FORM SUBMIT ====');
     setFormError(null);
     
     try {
-      // Update profile with either emoji or uploaded image
-      await updateProfile({
+      // Create profile update data with current avatar
+      const profileData = {
         ...formData,
+        // Ensure we're using the correct avatar value
         avatar: uploadedImage || selectedEmoji
-      });
+      };
+      
+      // Log the form data being submitted
+      console.log("Current user state:", JSON.stringify({
+        id: authState.user?.id,
+        username: authState.user?.username,
+        name: authState.user?.name,
+        hasToken: !!authState.token
+      }));
+      
+      console.log("Form data being submitted:", JSON.stringify({
+        ...profileData,
+        avatar: profileData.avatar ? 
+          (typeof profileData.avatar === 'string' && profileData.avatar.startsWith('data:image/') ? 
+            'Image data (length: ' + profileData.avatar.length + ')' : profileData.avatar) : null
+      }));
+      
+      console.log("About to call updateProfile...");
+      // Wait for update to complete
+      await updateProfile(profileData);
+      console.log("updateProfile completed successfully");
+      
+      // Force refresh of UI components
+      setRefreshRequired(true);
+      setAvatarKey(prev => prev + 1);
+      
+      // Dispatch event for other components to catch
+      window.dispatchEvent(new Event('avatarUpdated'));
+      console.log("Dispatched avatarUpdated event");
+      
+      // Close edit mode
       setIsEditing(false);
+      console.log('==== PROFILE UPDATE COMPLETE ====');
     } catch (error: any) {
+      console.error('==== PROFILE UPDATE ERROR ====');
+      console.error('Error updating profile:', error.message);
+      console.error(error);
       setFormError(error.message);
     }
   };
 
+  // Determine if current avatar is an image
+  const isImageAvatar = typeof authState.user.avatar === 'string' && 
+    authState.user.avatar.startsWith('data:image/');
+
   return (
-    <div className="bg-white rounded-lg shadow-md p-6 max-w-md mx-auto max-h-[90vh] flex flex-col overflow-hidden">
+    <div className="bg-white rounded-lg shadow-md p-6 max-w-md mx-auto max-h-[90vh] flex flex-col overflow-hidden min-h-0">
       {onClose && (
         <div className="flex justify-end">
           <button
@@ -107,7 +219,7 @@ const Profile: React.FC<ProfileProps> = ({ onClose }) => {
         </div>
       )}
       
-      <h2 className="text-2xl font-bold mb-4 text-center">
+      <h2 className="text-2xl font-bold mb-4">
         {isEditing ? 'Edit Profile' : 'Your Profile'}
       </h2>
       
@@ -118,9 +230,9 @@ const Profile: React.FC<ProfileProps> = ({ onClose }) => {
       )}
       
       {isEditing ? (
-        <form onSubmit={handleSubmit} className="flex flex-col h-full">
-          <div className="overflow-y-auto flex-grow pr-1">
-            <div className="mb-4 flex flex-col items-center">
+        <form onSubmit={handleSubmit} className="flex flex-col h-full min-h-0">
+          <div className="flex-grow overflow-y-auto pr-1 min-h-0">
+            <div className="mb-4 flex flex-col items-start">
               {/* Hidden file input */}
               <input 
                 type="file" 
@@ -136,7 +248,12 @@ const Profile: React.FC<ProfileProps> = ({ onClose }) => {
                 onClick={handleAvatarClick}
               >
                 {uploadedImage ? (
-                  <img src={uploadedImage} alt="Profile" className="w-full h-full object-cover" />
+                  <img 
+                    key={`upload-preview-${avatarKey}`} 
+                    src={uploadedImage} 
+                    alt="Profile" 
+                    className="w-full h-full object-cover" 
+                  />
                 ) : (
                   selectedEmoji
                 )}
@@ -149,7 +266,7 @@ const Profile: React.FC<ProfileProps> = ({ onClose }) => {
                 Click avatar to upload image
               </div>
               
-              <div className="flex flex-wrap justify-center gap-2 mb-2">
+              <div className="flex flex-wrap justify-start gap-2 mb-2">
                 {EMOJI_OPTIONS.map(emoji => (
                   <button
                     key={emoji}
@@ -177,7 +294,6 @@ const Profile: React.FC<ProfileProps> = ({ onClose }) => {
                 required
               />
             </div>
-            
             <div className="mb-4">
               <label className="block text-gray-700 mb-2" htmlFor="name">
                 Full Name
@@ -191,7 +307,6 @@ const Profile: React.FC<ProfileProps> = ({ onClose }) => {
                 onChange={handleChange}
               />
             </div>
-            
             <div className="mb-4">
               <label className="block text-gray-700 mb-2" htmlFor="bio">
                 Bio
@@ -205,7 +320,6 @@ const Profile: React.FC<ProfileProps> = ({ onClose }) => {
                 onChange={handleChange}
               />
             </div>
-            
             <div className="mb-4">
               <label className="block text-gray-700 mb-2" htmlFor="email">
                 Email
@@ -225,7 +339,7 @@ const Profile: React.FC<ProfileProps> = ({ onClose }) => {
             </div>
           </div>
           
-          <div className="flex gap-2 mt-4 pt-3 border-t border-gray-200">
+          <div className="flex gap-2 mt-4 pt-3 border-t border-gray-200 shrink-0">
             <button
               type="button"
               className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-md hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-opacity-50"
@@ -244,36 +358,118 @@ const Profile: React.FC<ProfileProps> = ({ onClose }) => {
         </form>
       ) : (
         <div className="overflow-y-auto">
-          <div className="flex flex-col items-center mb-6">
-            <div className="w-24 h-24 rounded-full bg-gray-200 flex items-center justify-center text-4xl mb-2 overflow-hidden">
-              {typeof authState.user.avatar === 'string' && authState.user.avatar.startsWith('data:image/') ? (
-                <img src={authState.user.avatar} alt="Profile" className="w-full h-full object-cover" />
+          {/* Centered profile layout */}
+          <div className="flex flex-col items-center text-center mb-6">
+            {/* Avatar */}
+            <div className="w-16 h-16 rounded-full bg-gray-200 flex items-center justify-center text-2xl overflow-hidden flex-shrink-0 mb-3">
+              {isImageAvatar ? (
+                <div 
+                  key={`profile-image-${avatarKey}`}
+                  className="w-full h-full"
+                  style={{
+                    backgroundImage: `url("${authState.user.avatar}")`,
+                    backgroundSize: 'cover',
+                    backgroundPosition: 'center'
+                  }}
+                />
               ) : (
                 authState.user.avatar || '👤'
               )}
             </div>
-            <h3 className="text-xl font-semibold">{authState.user.name}</h3>
-            <p className="text-gray-500">@{authState.user.username}</p>
+            
+            {/* Profile Info - centered */}
+            <div className="text-center">
+              {/* Name */}
+              <h3 className="text-lg font-bold text-gray-900 leading-tight">
+                {authState.user.name}
+              </h3>
+              
+              {/* Handle */}
+              <p className="text-gray-500 text-sm mb-2">
+                @{authState.user.username}
+              </p>
+              
+              {/* Bio */}
+              {authState.user.bio && (
+                <p className="text-gray-900 text-sm leading-relaxed">
+                  {authState.user.bio}
+                </p>
+              )}
+            </div>
           </div>
           
-          {authState.user.bio && (
-            <div className="mb-4">
-              <h4 className="text-sm font-semibold text-gray-500 mb-1">Bio</h4>
-              <p>{authState.user.bio}</p>
+          {/* Latest Post Section - Prominent Display */}
+          {!loadingLatestPost && latestPost && (
+            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 mb-6 shadow-sm">
+              <div className="flex items-center gap-2 mb-3">
+                <MessageSquare size={18} className="text-blue-600" />
+                <h4 className="text-sm font-bold text-blue-800 uppercase tracking-wide">Latest Message</h4>
+              </div>
+              
+              <div className="bg-white rounded-lg p-3 border border-blue-100">
+                <p className="text-gray-800 text-sm leading-relaxed mb-2">
+                  {latestPost.text || (latestPost.url ? `Shared: ${latestPost.url}` : 'Shared an image')}
+                </p>
+                
+                {latestPost.image && (
+                  <div className="mt-2 rounded-lg overflow-hidden">
+                    <img 
+                      src={latestPost.image} 
+                      alt="Latest post" 
+                      className="w-full max-h-32 object-cover"
+                    />
+                  </div>
+                )}
+                
+                <div className="flex items-center gap-1 mt-2 text-xs text-gray-500">
+                  <Calendar size={12} />
+                  <span>{new Date(latestPost.createdAt).toLocaleDateString()}</span>
+                </div>
+              </div>
             </div>
           )}
           
-          <div className="mb-4">
-            <h4 className="text-sm font-semibold text-gray-500 mb-1">Email</h4>
-            <p>{authState.user.email}</p>
+          {loadingLatestPost && (
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-6">
+              <div className="flex items-center gap-2 mb-3">
+                <MessageSquare size={18} className="text-gray-400" />
+                <h4 className="text-sm font-semibold text-gray-600">Latest Message</h4>
+              </div>
+              <div className="bg-white rounded-lg p-3 border border-gray-100">
+                <div className="animate-pulse">
+                  <div className="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
+                  <div className="h-3 bg-gray-200 rounded w-1/2"></div>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {!loadingLatestPost && !latestPost && (
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-6">
+              <div className="flex items-center gap-2 mb-3">
+                <MessageSquare size={18} className="text-gray-400" />
+                <h4 className="text-sm font-semibold text-gray-600">Latest Message</h4>
+              </div>
+              <div className="bg-white rounded-lg p-3 border border-gray-100">
+                <p className="text-gray-500 text-sm italic">No posts yet</p>
+              </div>
+            </div>
+          )}
+          
+          {/* Additional info section */}
+          <div className="border-t border-gray-100 pt-4 space-y-3">
+            <div>
+              <h4 className="text-sm font-semibold text-gray-500 mb-1">Email</h4>
+              <p className="text-sm">{authState.user.email}</p>
+            </div>
+            
+            <div>
+              <h4 className="text-sm font-semibold text-gray-500 mb-1">Member Since</h4>
+              <p className="text-sm">{new Date(authState.user.createdAt).toLocaleDateString()}</p>
+            </div>
           </div>
           
-          <div className="mb-4">
-            <h4 className="text-sm font-semibold text-gray-500 mb-1">Member Since</h4>
-            <p>{new Date(authState.user.createdAt).toLocaleDateString()}</p>
-          </div>
-          
-          <div className="flex gap-2 mt-8">
+          <div className="flex gap-2 mt-6 pt-4 border-t border-gray-100">
             <button
               className="flex-1 bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50"
               onClick={() => setIsEditing(true)}
