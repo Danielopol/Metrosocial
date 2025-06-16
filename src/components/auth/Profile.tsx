@@ -7,11 +7,12 @@ import { MessageSquare, Calendar } from 'lucide-react';
 interface ProfileProps {
   onClose?: () => void;
   initialEditMode?: boolean;
+  isModal?: boolean;
 }
 
 const EMOJI_OPTIONS = ['👤', '👨‍💻', '👩‍💻', '👨‍🎨', '👩‍🎨', '👨‍🚀', '👩‍🚀', '🧑‍🎓', '👨‍🎓', '👩‍🎓'];
 
-const Profile: React.FC<ProfileProps> = ({ onClose, initialEditMode }) => {
+const Profile: React.FC<ProfileProps> = ({ onClose, initialEditMode, isModal }) => {
   const { authState, updateProfile, logout } = useAuth();
   const { getLatestUserPost } = usePosts();
   const [isEditing, setIsEditing] = useState(initialEditMode || false);
@@ -204,7 +205,11 @@ const Profile: React.FC<ProfileProps> = ({ onClose, initialEditMode }) => {
     authState.user.avatar.startsWith('data:image/');
 
   return (
-    <div className="bg-white rounded-lg shadow-md p-6 max-w-md mx-auto max-h-[90vh] flex flex-col overflow-hidden min-h-0">
+    <div className={`p-6 flex flex-col min-h-0 ${
+      isModal 
+        ? '' // In modal - no extra styling needed
+        : 'bg-white rounded-lg shadow-md max-w-md mx-auto max-h-[90vh] overflow-hidden' // Standalone - full styling
+    }`}>
       {onClose && (
         <div className="flex justify-end">
           <button
@@ -219,9 +224,11 @@ const Profile: React.FC<ProfileProps> = ({ onClose, initialEditMode }) => {
         </div>
       )}
       
-      <h2 className="text-2xl font-bold mb-4">
-        {isEditing ? 'Edit Profile' : 'Your Profile'}
-      </h2>
+      {!isModal && (
+        <h2 className="text-2xl font-bold mb-4">
+          {isEditing ? 'Edit Profile' : 'Your Profile'}
+        </h2>
+      )}
       
       {formError && (
         <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-md">
@@ -231,7 +238,7 @@ const Profile: React.FC<ProfileProps> = ({ onClose, initialEditMode }) => {
       
       {isEditing ? (
         <form onSubmit={handleSubmit} className="flex flex-col h-full min-h-0">
-          <div className="flex-grow overflow-y-auto pr-1 min-h-0">
+          <div className="flex-grow pr-1 min-h-0">
             <div className="mb-4 flex flex-col items-start">
               {/* Hidden file input */}
               <input 
@@ -357,7 +364,7 @@ const Profile: React.FC<ProfileProps> = ({ onClose, initialEditMode }) => {
           </div>
         </form>
       ) : (
-        <div className="overflow-y-auto">
+        <div>
           {/* Centered profile layout */}
           <div className="flex flex-col items-center text-center mb-6">
             {/* Avatar */}

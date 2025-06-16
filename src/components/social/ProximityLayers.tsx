@@ -30,6 +30,9 @@ const ProximityLayers: React.FC<ProximityLayersProps> = ({
   const [avatarKey, setAvatarKey] = useState(0); // Force re-render when avatar changes
   const [selectedUserLatestPost, setSelectedUserLatestPost] = useState<SocialPost | null>(null);
   const [loadingSelectedUserPost, setLoadingSelectedUserPost] = useState(false);
+  const [userNotifications, setUserNotifications] = useState<Set<string>>(new Set()); // Track users with new posts
+  const [lastSeenPosts, setLastSeenPosts] = useState<Map<string, string>>(new Map()); // Track last seen post ID for each user
+  const [recentNotifications, setRecentNotifications] = useState<Map<string, { username: string; timestamp: number }>>(new Map()); // Track recent notifications for popup
 
   // Listen for profile updates to refresh current user avatar
   useEffect(() => {
@@ -63,6 +66,93 @@ const ProximityLayers: React.FC<ProximityLayersProps> = ({
   useEffect(() => {
     setAvatarKey(prev => prev + 1);
   }, [currentUser?.avatar]);
+
+  // Check for new posts from nearby users periodically
+  useEffect(() => {
+    if (!isOnline || nearbyUsers.length === 0) return;
+
+    const checkForNewPosts = async () => {
+      const newNotifications = new Set(userNotifications);
+      const updatedLastSeenPosts = new Map(lastSeenPosts);
+      const updatedRecentNotifications = new Map(recentNotifications);
+
+      // Transform nearby users to get the correct user IDs
+      const transformedUsers = nearbyUsers.map((user: any) => ({
+        id: user.id || user.userId,
+        username: user.username,
+        avatar: user.avatar || '👤',
+        distance: user.distance,
+        zone: calculateProximityZone(user.distance),
+        status: 'online' as const,
+        location: {
+          lat: user.location?.latitude || 0,
+          lng: user.location?.longitude || 0
+        },
+        name: user.name,
+        bio: user.bio
+      }));
+
+      for (const user of transformedUsers) {
+        if (user.id === currentUser?.id) continue; // Skip current user
+
+        try {
+          const latestPost = await getLatestUserPost(user.id);
+          if (latestPost) {
+            const lastSeenPostId = lastSeenPosts.get(user.id);
+            
+            // If this is a new post (different from last seen), add notification
+            if (lastSeenPostId !== latestPost.id) {
+              newNotifications.add(user.id);
+              updatedLastSeenPosts.set(user.id, latestPost.id);
+              
+              // Add to recent notifications for popup
+              updatedRecentNotifications.set(user.id, {
+                username: user.username,
+                timestamp: Date.now()
+              });
+            }
+          }
+        } catch (error) {
+          console.error(`Error checking posts for user ${user.id}:`, error);
+        }
+      }
+
+      setUserNotifications(newNotifications);
+      setLastSeenPosts(updatedLastSeenPosts);
+      setRecentNotifications(updatedRecentNotifications);
+      
+      // Debug logging
+      console.log('Notification check completed:', {
+        totalUsers: transformedUsers.length,
+        newNotifications: Array.from(newNotifications),
+        recentNotifications: Array.from(updatedRecentNotifications.keys())
+      });
+    };
+
+    // Check immediately and then every 30 seconds
+    checkForNewPosts();
+    const interval = setInterval(checkForNewPosts, 30000);
+
+    return () => clearInterval(interval);
+  }, [isOnline, nearbyUsers, currentUser?.id, getLatestUserPost]);
+
+  // Clear recent notifications after 5 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setRecentNotifications(prev => {
+        const updated = new Map(prev);
+        for (const [userId, notification] of updated.entries()) {
+          if (now - notification.timestamp > 5000) { // 5 seconds
+            updated.delete(userId);
+          }
+        }
+        return updated;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   // Calculate proximity zone based on distance
   const calculateProximityZone = (distance: number): ProximityUser['zone'] => {
@@ -239,6 +329,13 @@ const ProximityLayers: React.FC<ProximityLayersProps> = ({
     setShowUserModal(true);
     onUserClick(user.id);
     
+    // Clear notification for this user when their profile is viewed
+    setUserNotifications(prev => {
+      const updated = new Set(prev);
+      updated.delete(user.id);
+      return updated;
+    });
+    
     // Fetch latest post for the selected user
     fetchLatestPostForUser(user.id);
   };
@@ -341,6 +438,94 @@ const ProximityLayers: React.FC<ProximityLayersProps> = ({
           .pulse-animation-delay-3 {
             animation: proximity-pulse 4s infinite 3s;
           }
+          @keyframes notification-bounce {
+            0%, 100% { transform: scale(1); }
+            25% { transform: scale(1.4) rotate(-5deg); }
+            50% { transform: scale(1.6) rotate(0deg); }
+            75% { transform: scale(1.4) rotate(5deg); }
+          }
+          @keyframes notification-glow {
+            0%, 100% { 
+              box-shadow: 0 0 10px rgba(239, 68, 68, 0.8), 0 0 20px rgba(239, 68, 68, 0.6), 0 0 30px rgba(239, 68, 68, 0.4);
+              background: linear-gradient(45deg, #ef4444, #dc2626);
+            }
+            50% { 
+              box-shadow: 0 0 20px rgba(239, 68, 68, 1), 0 0 40px rgba(239, 68, 68, 0.8), 0 0 60px rgba(239, 68, 68, 0.6);
+              background: linear-gradient(45deg, #f87171, #ef4444);
+            }
+          }
+          @keyframes notification-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+          }
+          .notification-badge {
+            animation: notification-bounce 1.2s infinite, notification-glow 1.5s infinite, notification-pulse 0.8s infinite;
+          }
+          @keyframes bubble-float {
+            0%, 100% { 
+              transform: translateY(0px) scale(1);
+              opacity: 0.9;
+            }
+            50% { 
+              transform: translateY(-8px) scale(1.1);
+              opacity: 1;
+            }
+          }
+          @keyframes bubble-pop {
+            0% { 
+              transform: scale(0) translateY(20px);
+              opacity: 0;
+            }
+            50% { 
+              transform: scale(1.2) translateY(-5px);
+              opacity: 1;
+            }
+            100% { 
+              transform: scale(1) translateY(0px);
+              opacity: 0.9;
+            }
+          }
+          @keyframes bubble-shimmer {
+            0%, 100% { 
+              background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.8), rgba(239,68,68,0.9), rgba(220,38,38,1));
+            }
+            50% { 
+              background: radial-gradient(circle at 70% 70%, rgba(255,255,255,0.9), rgba(248,113,113,0.9), rgba(239,68,68,1));
+            }
+          }
+          .notification-bubble {
+            animation: bubble-pop 0.6s ease-out, bubble-float 2s ease-in-out 0.6s infinite, bubble-shimmer 3s ease-in-out infinite;
+            background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.8), rgba(239,68,68,0.9), rgba(220,38,38,1));
+            box-shadow: 
+              0 8px 32px rgba(239, 68, 68, 0.4),
+              0 4px 16px rgba(239, 68, 68, 0.6),
+              inset 0 2px 4px rgba(255, 255, 255, 0.3),
+              inset 0 -2px 4px rgba(0, 0, 0, 0.2);
+            border: 2px solid rgba(255, 255, 255, 0.4);
+          }
+          .bubble-tail {
+            position: absolute;
+            bottom: -8px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 0;
+            height: 0;
+            border-left: 8px solid transparent;
+            border-right: 8px solid transparent;
+            border-top: 12px solid rgba(239, 68, 68, 0.9);
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
+          }
+          .bubble-tail::before {
+            content: '';
+            position: absolute;
+            top: -14px;
+            left: -6px;
+            width: 0;
+            height: 0;
+            border-left: 6px solid transparent;
+            border-right: 6px solid transparent;
+            border-top: 10px solid rgba(255, 255, 255, 0.3);
+          }
         `}
       </style>
       <div className="relative w-full h-full bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 overflow-hidden">
@@ -408,13 +593,16 @@ const ProximityLayers: React.FC<ProximityLayersProps> = ({
           </div>
 
           {/* User Nodes */}
-          {Object.entries(usersByZone).map(([zone, users]) =>
-            users.map((user, index) => {
+          {Object.entries(usersByZone).map(([zone, users]) => {
+            console.log(`Rendering ${users.length} users in ${zone} zone:`, users.map(u => u.username));
+            return users.map((user, index) => {
               const position = positionUser(user, index, users.length);
+              const hasNotification = userNotifications.has(user.id);
+              console.log(`User ${user.username} (${user.id}): hasNotification=${hasNotification}, index=${index}`);
               return (
                 <div
                   key={user.id}
-                  className="absolute rounded-full border-3 cursor-pointer transition-all duration-300 hover:scale-120 hover:z-30 z-10 flex items-center justify-center overflow-hidden w-12 h-12 sm:w-16 sm:h-16"
+                  className="absolute rounded-full border-3 cursor-pointer transition-all duration-300 hover:scale-120 hover:z-30 z-10 flex items-center justify-center w-12 h-12 sm:w-16 sm:h-16"
                   style={{
                     left: position.left,
                     top: position.top,
@@ -425,7 +613,11 @@ const ProximityLayers: React.FC<ProximityLayersProps> = ({
                   }}
                   onClick={() => handleUserClick(user)}
                 >
-                  {renderUserAvatar(user)}
+                  <div className="w-full h-full rounded-full overflow-hidden flex items-center justify-center">
+                    {renderUserAvatar(user)}
+                  </div>
+                  
+                  {/* User Name Label */}
                   <div 
                     className="absolute -top-8 sm:-top-10 left-1/2 transform -translate-x-1/2 text-xs font-bold text-white whitespace-nowrap pointer-events-none"
                     style={{ 
@@ -434,10 +626,58 @@ const ProximityLayers: React.FC<ProximityLayersProps> = ({
                   >
                     {user.username}
                   </div>
+                  
+                  {/* 3D Notification Bubble */}
+                  {hasNotification && (
+                    <div className="absolute z-30" style={{ top: '-80px', left: '50%', transform: 'translateX(-50%)', pointerEvents: 'none' }}>
+                      <div className="relative">
+                        {/* Main 3D Bubble */}
+                        <div 
+                          className="w-12 h-12 rounded-full notification-bubble flex items-center justify-center"
+                          style={{
+                            background: 'radial-gradient(circle at 30% 30%, rgba(255,255,255,0.8), rgba(239,68,68,0.9), rgba(220,38,38,1))',
+                            boxShadow: '0 8px 32px rgba(239, 68, 68, 0.4), 0 4px 16px rgba(239, 68, 68, 0.6), inset 0 2px 4px rgba(255, 255, 255, 0.3), inset 0 -2px 4px rgba(0, 0, 0, 0.2)',
+                            border: '2px solid rgba(255, 255, 255, 0.4)'
+                          }}
+                        >
+                          <span className="text-white text-lg font-bold drop-shadow-sm">!</span>
+                        </div>
+                        {/* Bubble Tail */}
+                        <div 
+                          className="absolute"
+                          style={{
+                            bottom: '-12px',
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            width: '0',
+                            height: '0',
+                            borderLeft: '10px solid transparent',
+                            borderRight: '10px solid transparent',
+                            borderTop: '15px solid rgba(239, 68, 68, 0.9)',
+                            filter: 'drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2))'
+                          }}
+                        />
+                        {/* Tail highlight */}
+                        <div 
+                          className="absolute"
+                          style={{
+                            bottom: '-10px',
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            width: '0',
+                            height: '0',
+                            borderLeft: '8px solid transparent',
+                            borderRight: '8px solid transparent',
+                            borderTop: '12px solid rgba(255, 255, 255, 0.3)'
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
-            })
-          )}
+            });
+          })}
         </div>
 
         {/* Feed Split View */}
@@ -797,11 +1037,30 @@ const ProximityLayers: React.FC<ProximityLayersProps> = ({
                       <span className="text-gray-400">{Math.round(selectedUser.distance)}m away</span>
                     </div>
                     
-                    {selectedUser.bio && (
-                      <div className="bg-white/10 rounded-lg p-4 mb-6">
-                        <p className="text-gray-300 text-sm leading-relaxed">{selectedUser.bio}</p>
+                    {/* Full profile information for other users */}
+                    <div className="bg-white/10 rounded-lg p-4 mb-4 text-left space-y-3">
+                      <div>
+                        <span className="text-gray-400 text-sm">Full Name:</span>
+                        <p className="text-white font-medium">{selectedUser.name || 'Not set'}</p>
                       </div>
-                    )}
+                      
+                      <div>
+                        <span className="text-gray-400 text-sm">Username:</span>
+                        <p className="text-white font-medium">{selectedUser.username}</p>
+                      </div>
+                      
+                      {selectedUser.bio ? (
+                        <div>
+                          <span className="text-gray-400 text-sm">Bio:</span>
+                          <p className="text-gray-300 leading-relaxed">{selectedUser.bio}</p>
+                        </div>
+                      ) : (
+                        <div>
+                          <span className="text-gray-400 text-sm">Bio:</span>
+                          <p className="text-gray-500 italic">No bio added yet</p>
+                        </div>
+                      )}
+                    </div>
                     
                     {/* Latest Post Section for Other Users */}
                     {!loadingSelectedUserPost && selectedUserLatestPost && (
@@ -866,12 +1125,9 @@ const ProximityLayers: React.FC<ProximityLayersProps> = ({
                       <span className="text-green-400 text-sm">Online</span>
                     </div>
                     
-                    <div className="flex gap-4 justify-center">
+                    <div className="flex justify-center">
                       <button className="bg-gradient-to-r from-green-500 to-green-600 text-white px-6 py-2 rounded-full font-semibold hover:scale-105 transition-all duration-200">
                         💬 Start Chat
-                      </button>
-                      <button className="bg-gradient-to-r from-gray-600 to-gray-700 text-white px-6 py-2 rounded-full font-semibold hover:scale-105 transition-all duration-200">
-                        👤 View Profile
                       </button>
                     </div>
                   </div>
@@ -923,7 +1179,7 @@ const ProximityLayers: React.FC<ProximityLayersProps> = ({
               
               {/* Profile Component */}
               <div className="overflow-y-auto max-h-[calc(90vh-80px)]">
-                <Profile onClose={() => setShowProfileEdit(false)} initialEditMode={true} />
+                <Profile onClose={() => setShowProfileEdit(false)} initialEditMode={true} isModal={true} />
               </div>
             </div>
           </div>
@@ -953,6 +1209,27 @@ const ProximityLayers: React.FC<ProximityLayersProps> = ({
               {isOnline ? 'Online' : 'Offline'}
             </span>
           </div>
+        </div>
+
+        {/* New Post Popup Notifications */}
+        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-60 space-y-2">
+          {Array.from(recentNotifications.entries()).map(([userId, notification]) => (
+            <div
+              key={userId}
+              className="bg-gradient-to-r from-red-500 to-red-600 text-white px-4 py-2 rounded-full shadow-lg border-2 border-white animate-bounce"
+              style={{
+                boxShadow: '0 0 20px rgba(239, 68, 68, 0.8), 0 4px 20px rgba(0, 0, 0, 0.3)'
+              }}
+            >
+              <div className="flex items-center space-x-2">
+                <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+                <span className="text-sm font-bold">
+                  {notification.username} posted something new!
+                </span>
+                <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </>
